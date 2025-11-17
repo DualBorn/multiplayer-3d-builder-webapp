@@ -1,20 +1,22 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback, memo } from 'react'
 import { useSceneStore } from '@/lib/store/useSceneStore'
 import { supabase } from '@/lib/supabase/client'
 import { useAuthStore } from '@/lib/store/useAuthStore'
+import { useToast } from '@/hooks/useToast'
 
 interface ToolbarProps {
   userColor: string
 }
 
-export default function Toolbar({ userColor }: ToolbarProps) {
+function Toolbar({ userColor }: ToolbarProps) {
   const [objectType, setObjectType] = useState<'cube' | 'sphere'>('cube')
   const { addObject } = useSceneStore()
   const user = useAuthStore((state) => state.user)
+  const { showError } = useToast()
 
-  const handleAddObject = async () => {
+  const handleAddObject = useCallback(async () => {
     if (!user) return
 
     const userName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'
@@ -41,7 +43,7 @@ export default function Toolbar({ userColor }: ToolbarProps) {
 
     if (error) {
       console.error('Error adding object:', error)
-      alert('Error adding object: ' + error.message)
+      showError('Error adding object: ' + error.message)
       return
     }
 
@@ -60,7 +62,7 @@ export default function Toolbar({ userColor }: ToolbarProps) {
       }
       addObject(storeObject)
     }
-  }
+  }, [user, objectType, userColor, addObject, showError])
 
   return (
     <div className="p-4 border-b border-gray-700">
@@ -77,6 +79,8 @@ export default function Toolbar({ userColor }: ToolbarProps) {
                   ? 'bg-blue-600 text-white'
                   : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
               }`}
+              aria-label="Select cube"
+              aria-pressed={objectType === 'cube'}
             >
               Cube
             </button>
@@ -87,6 +91,8 @@ export default function Toolbar({ userColor }: ToolbarProps) {
                   ? 'bg-blue-600 text-white'
                   : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
               }`}
+              aria-label="Select sphere"
+              aria-pressed={objectType === 'sphere'}
             >
               Sphere
             </button>
@@ -96,6 +102,7 @@ export default function Toolbar({ userColor }: ToolbarProps) {
         <button
           onClick={handleAddObject}
           className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors"
+          aria-label={`Add ${objectType}`}
         >
           Add {objectType === 'cube' ? 'Cube' : 'Sphere'}
         </button>
@@ -114,4 +121,6 @@ export default function Toolbar({ userColor }: ToolbarProps) {
     </div>
   )
 }
+
+export default memo(Toolbar)
 
