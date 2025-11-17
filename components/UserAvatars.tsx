@@ -2,8 +2,8 @@
 
 import { useFrame } from '@react-three/fiber'
 import { Sphere, Text } from '@react-three/drei'
-import { useRef } from 'react'
-import { usePresenceStore } from '@/lib/store/usePresenceStore'
+import { useRef, memo } from 'react'
+import { usePresenceStore, PresenceUser } from '@/lib/store/usePresenceStore'
 import * as THREE from 'three'
 
 interface UserAvatarsProps {
@@ -11,7 +11,7 @@ interface UserAvatarsProps {
   currentUserName: string
 }
 
-export default function UserAvatars({ currentUserColor, currentUserName }: UserAvatarsProps) {
+function UserAvatars({ currentUserColor, currentUserName }: UserAvatarsProps) {
   const users = usePresenceStore((state) => state.getUsers())
 
   return (
@@ -23,7 +23,11 @@ export default function UserAvatars({ currentUserColor, currentUserName }: UserA
   )
 }
 
-function UserAvatar({ user }: { user: any }) {
+interface UserAvatarProps {
+  user: PresenceUser
+}
+
+const UserAvatar = memo(function UserAvatar({ user }: UserAvatarProps) {
   const meshRef = useRef<THREE.Mesh>(null)
 
   useFrame((state) => {
@@ -61,5 +65,7 @@ function UserAvatar({ user }: { user: any }) {
       </Text>
     </group>
   )
-}
+})
+
+export default memo(UserAvatars)
 
