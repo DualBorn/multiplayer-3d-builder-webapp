@@ -1,20 +1,25 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import { useSceneStore } from '@/lib/store/useSceneStore'
 import { useAuthStore } from '@/lib/store/useAuthStore'
+import { SavedScene } from '@/types'
+import { useToast } from '@/hooks/useToast'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 export default function SaveLoadPanel() {
   const [sceneName, setSceneName] = useState('')
-  const [savedScenes, setSavedScenes] = useState<any[]>([])
+  const [savedScenes, setSavedScenes] = useState<SavedScene[]>([])
   const [loading, setLoading] = useState(false)
-  const { objects, setObjects, clearScene } = useSceneStore()
+  const [confirmDialog, setConfirmDialog] = useState<{ type: 'load' | 'delete'; scene: SavedScene } | null>(null)
+  const { objects, setObjects } = useSceneStore()
   const user = useAuthStore((state) => state.user)
+  const { showSuccess, showError } = useToast()
 
-  const loadSavedScenes = async () => {
+  const loadSavedScenes = useCallback(async () => {
     if (!user) {
-      alert('You must be logged in to load scenes')
+      showError('You must be logged in to load scenes')
       return
     }
 
@@ -26,20 +31,22 @@ export default function SaveLoadPanel() {
       .order('created_at', { ascending: false })
       .limit(10)
 
-    if (!error && data) {
-      setSavedScenes(data)
+    if (error) {
+      showError('Failed to load scenes: ' + error.message)
+    } else if (data) {
+      setSavedScenes(data as SavedScene[])
     }
     setLoading(false)
-  }
+  }, [user, showError])
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
     if (!sceneName.trim()) {
-      alert('Please enter a scene name')
+      showError('Please enter a scene name')
       return
     }
 
     if (!user) {
-      alert('You must be logged in to save scenes')
+      showError('You must be logged in to save scenes')
       return
     }
 
@@ -56,46 +63,78 @@ export default function SaveLoadPanel() {
       ])
       .select()
 
-    if (!error && data) {
-      alert('Scene saved successfully!')
+    if (error) {
+      showError('Error saving scene: ' + error.message)
+    } else if (data) {
+      showSuccess('Scene saved successfully!')
       setSceneName('')
       loadSavedScenes()
-    } else {
-      alert('Error saving scene: ' + (error?.message || 'Unknown error'))
     }
     setLoading(false)
-  }
+  }, [sceneName, user, objects, showError, showSuccess, loadSavedScenes])
 
-  const handleLoad = async (scene: any) => {
-    if (!confirm('Load this scene? Current scene will be replaced.')) return
+  const handleLoad = useCallback((scene: SavedScene) => {
+    setConfirmDialog({ type: 'load', scene })
+  }, [])
+
+  const handleDelete = useCallback((scene: SavedScene) => {
+    setConfirmDialog({ type: 'delete', scene })
+  }, [])
+
+  const confirmLoad = useCallback(async () => {
+    if (!confirmDialog || confirmDialog.type !== 'load') return
 
     setLoading(true)
-    // Clear current scene objects from database
-    await supabase.from('scene_objects').delete().neq('id', 'dummy')
+    const scene = confirmDialog.scene
 
-    // Insert loaded objects
+    // Get all current scene objects and delete them properly
+    const { data: currentObjects } = await supabase.from('scene_objects').select('id')
+    if (currentObjects && currentObjects.length > 0) {
+      const ids = currentObjects.map((obj) => obj.id)
+      await supabase.from('scene_objects').delete().in('id', ids)
+    }
+
+    // Convert scene data to database format and insert
     if (scene.scene_data && Array.isArray(scene.scene_data)) {
-      const { error } = await supabase.from('scene_objects').insert(scene.scene_data)
-      if (!error) {
-        setObjects(scene.scene_data)
-        alert('Scene loaded successfully!')
+      // Convert camelCase to snake_case for database
+      const dbObjects = scene.scene_data.map((obj) => ({
+        id: obj.id,
+        type: obj.type,
+        position: obj.position,
+        rotation: obj.rotation,
+        scale: obj.scale,
+        color: obj.color,
+        user_id: obj.userId,
+        user_name: obj.userName,
+        created_at: obj.createdAt,
+      }))
+
+      const { error } = await supabase.from('scene_objects').insert(dbObjects)
+      if (error) {
+        showError('Error loading scene: ' + error.message)
       } else {
-        alert('Error loading scene: ' + error.message)
+        setObjects(scene.scene_data)
+        showSuccess('Scene loaded successfully!')
       }
     }
+    setConfirmDialog(null)
     setLoading(false)
-  }
+  }, [confirmDialog, setObjects, showError, showSuccess])
 
-  const handleDelete = async (sceneId: string) => {
-    if (!confirm('Delete this saved scene?')) return
+  const confirmDelete = useCallback(async () => {
+    if (!confirmDialog || confirmDialog.type !== 'delete') return
 
     setLoading(true)
-    const { error } = await supabase.from('saved_scenes').delete().eq('id', sceneId)
-    if (!error) {
+    const { error } = await supabase.from('saved_scenes').delete().eq('id', confirmDialog.scene.id)
+    if (error) {
+      showError('Error deleting scene: ' + error.message)
+    } else {
+      showSuccess('Scene deleted successfully!')
       loadSavedScenes()
     }
+    setConfirmDialog(null)
     setLoading(false)
-  }
+  }, [confirmDialog, loadSavedScenes, showError, showSuccess])
 
   return (
     <div className="p-4">
@@ -142,13 +181,15 @@ export default function SaveLoadPanel() {
                     onClick={() => handleLoad(scene)}
                     disabled={loading}
                     className="px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white text-xs rounded transition-colors"
+                    aria-label={`Load scene ${scene.name}`}
                   >
                     Load
                   </button>
                   <button
-                    onClick={() => handleDelete(scene.id)}
+                    onClick={() => handleDelete(scene)}
                     disabled={loading}
                     className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 text-white text-xs rounded transition-colors"
+                    aria-label={`Delete scene ${scene.name}`}
                   >
                     Delete
                   </button>
@@ -158,6 +199,17 @@ export default function SaveLoadPanel() {
           </div>
         )}
       </div>
+      {confirmDialog && (
+        <ConfirmDialog
+          message={
+            confirmDialog.type === 'load'
+              ? 'Load this scene? Current scene will be replaced.'
+              : 'Delete this saved scene?'
+          }
+          onConfirm={confirmDialog.type === 'load' ? confirmLoad : confirmDelete}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   )
 }
