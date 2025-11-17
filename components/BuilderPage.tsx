@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import { useAuthStore } from '@/lib/store/useAuthStore'
 import { useSceneStore } from '@/lib/store/useSceneStore'
@@ -9,34 +9,61 @@ import Scene3D from '@/components/Scene3D'
 import PlayerList from '@/components/PlayerList'
 import Toolbar from '@/components/Toolbar'
 import SaveLoadPanel from '@/components/SaveLoadPanel'
+import { generateUserColor } from '@/lib/utils/color'
+import { convertDatabaseToStore } from '@/lib/utils/sceneConverter'
+import { PresenceData } from '@/types'
+import { ToastContainer } from '@/components/Toast'
+import { useToast } from '@/hooks/useToast'
 
 export default function BuilderPage() {
   const user = useAuthStore((state) => state.user)
-  const [userName, setUserName] = useState('')
-  const [userColor, setUserColor] = useState('#3b82f6')
   const { setObjects, clearScene } = useSceneStore()
-  const { addUser, removeUser, updateUser } = usePresenceStore()
+  const { addUser, removeUser } = usePresenceStore()
+  const { toasts, showError, removeToast } = useToast()
+
+  // Memoize user name and color to prevent unnecessary recalculations
+  const userName = useMemo(() => {
+    if (!user) return ''
+    return user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'
+  }, [user])
+
+  const userColor = useMemo(() => {
+    if (!user) return '#3b82f6'
+    return generateUserColor(user.id)
+  }, [user])
+
+  // Helper function to add presence user (extracted to avoid duplication)
+  const addPresenceUser = useCallback(
+    (presence: PresenceData) => {
+      if (presence.userId) {
+        addUser({
+          id: presence.id || presence.userId,
+          userId: presence.userId,
+          userName: presence.userName || 'User',
+          color: presence.color || '#3b82f6',
+          position: presence.position || [0, 0, 0],
+          lastSeen: new Date().toISOString(),
+        })
+      }
+    },
+    [addUser]
+  )
+
+  const loadScene = useCallback(async () => {
+    const { data, error } = await supabase.from('scene_objects').select('*').order('created_at')
+    if (error) {
+      showError('Failed to load scene: ' + error.message)
+      return
+    }
+    if (data) {
+      // Convert snake_case to camelCase for the store
+      const convertedObjects = data.map((obj) => convertDatabaseToStore(obj as import('@/types').DatabaseSceneObject))
+      setObjects(convertedObjects)
+    }
+  }, [setObjects, showError])
 
   useEffect(() => {
     if (!user) return
-
-    // Get or set user name
-    const name = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'
-    setUserName(name)
-
-    // Generate a unique color for this user
-    const colors = [
-      '#3b82f6', // blue
-      '#ef4444', // red
-      '#10b981', // green
-      '#f59e0b', // amber
-      '#8b5cf6', // purple
-      '#ec4899', // pink
-      '#06b6d4', // cyan
-      '#84cc16', // lime
-    ]
-    const colorIndex = (user.id.charCodeAt(0) + user.id.charCodeAt(1)) % colors.length
-    setUserColor(colors[colorIndex])
 
     // Set up presence
     const channel = supabase.channel('presence', {
@@ -50,36 +77,18 @@ export default function BuilderPage() {
     channel
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState()
-        const users = Object.values(state).flat() as any[]
-        users.forEach((presence: any) => {
-          if (presence.userId) {
-            addUser({
-              id: presence.id || presence.userId,
-              userId: presence.userId,
-              userName: presence.userName || 'User',
-              color: presence.color || '#3b82f6',
-              position: presence.position || [0, 0, 0],
-              lastSeen: new Date().toISOString(),
-            })
-          }
+        const users = Object.values(state).flat() as PresenceData[]
+        users.forEach((presence) => {
+          addPresenceUser(presence)
         })
       })
-      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-        newPresences.forEach((presence: any) => {
-          if (presence.userId) {
-            addUser({
-              id: presence.id || presence.userId,
-              userId: presence.userId,
-              userName: presence.userName || 'User',
-              color: presence.color || '#3b82f6',
-              position: presence.position || [0, 0, 0],
-              lastSeen: new Date().toISOString(),
-            })
-          }
+      .on('presence', { event: 'join' }, ({ newPresences }) => {
+        newPresences.forEach((presence: PresenceData) => {
+          addPresenceUser(presence)
         })
       })
-      .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-        leftPresences.forEach((presence: any) => {
+      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
+        leftPresences.forEach((presence: PresenceData) => {
           if (presence.userId) {
             removeUser(presence.userId)
           }
@@ -90,7 +99,7 @@ export default function BuilderPage() {
           await channel.track({
             id: user.id,
             userId: user.id,
-            userName: name,
+            userName: userName,
             color: userColor,
             position: [0, 0, 0],
             online_at: new Date().toISOString(),
@@ -110,32 +119,12 @@ export default function BuilderPage() {
         },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            const newObj = payload.new as any
-            const convertedObj = {
-              id: newObj.id,
-              type: newObj.type,
-              position: newObj.position,
-              rotation: newObj.rotation,
-              scale: newObj.scale,
-              color: newObj.color,
-              userId: newObj.user_id,
-              userName: newObj.user_name,
-              createdAt: newObj.created_at,
-            }
+            const newObj = payload.new as unknown as import('@/types').DatabaseSceneObject
+            const convertedObj = convertDatabaseToStore(newObj)
             setObjects([...useSceneStore.getState().objects, convertedObj])
           } else if (payload.eventType === 'UPDATE') {
-            const updatedObj = payload.new as any
-            const convertedObj = {
-              id: updatedObj.id,
-              type: updatedObj.type,
-              position: updatedObj.position,
-              rotation: updatedObj.rotation,
-              scale: updatedObj.scale,
-              color: updatedObj.color,
-              userId: updatedObj.user_id,
-              userName: updatedObj.user_name,
-              createdAt: updatedObj.created_at,
-            }
+            const updatedObj = payload.new as unknown as import('@/types').DatabaseSceneObject
+            const convertedObj = convertDatabaseToStore(updatedObj)
             const objects = useSceneStore.getState().objects
             const updated = objects.map((obj) =>
               obj.id === convertedObj.id ? convertedObj : obj
@@ -143,7 +132,7 @@ export default function BuilderPage() {
             setObjects(updated)
           } else if (payload.eventType === 'DELETE') {
             const objects = useSceneStore.getState().objects
-            const filtered = objects.filter((obj) => obj.id !== payload.old.id)
+            const filtered = objects.filter((obj) => obj.id !== (payload.old as { id: string }).id)
             setObjects(filtered)
           }
         }
@@ -159,26 +148,7 @@ export default function BuilderPage() {
       supabase.removeChannel(channel)
       supabase.removeChannel(sceneChannel)
     }
-  }, [user, userColor])
-
-  const loadScene = async () => {
-    const { data, error } = await supabase.from('scene_objects').select('*').order('created_at')
-    if (!error && data) {
-      // Convert snake_case to camelCase for the store
-      const convertedObjects = data.map((obj: any) => ({
-        id: obj.id,
-        type: obj.type,
-        position: obj.position,
-        rotation: obj.rotation,
-        scale: obj.scale,
-        color: obj.color,
-        userId: obj.user_id,
-        userName: obj.user_name,
-        createdAt: obj.created_at,
-      }))
-      setObjects(convertedObjects)
-    }
-  }
+  }, [user, userName, userColor, addPresenceUser, removeUser, setObjects, loadScene])
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
@@ -207,12 +177,15 @@ export default function BuilderPage() {
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="md:hidden px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm transition-colors"
+            aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+            aria-expanded={sidebarOpen}
           >
             {sidebarOpen ? '✕' : '☰'}
           </button>
           <button
             onClick={handleSignOut}
             className="px-3 md:px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs md:text-sm transition-colors"
+            aria-label="Sign out"
           >
             Sign Out
           </button>
@@ -247,6 +220,7 @@ export default function BuilderPage() {
           />
         )}
       </div>
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
     </div>
   )
 }
