@@ -2,7 +2,7 @@
 
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Sky, PerspectiveCamera, Grid } from '@react-three/drei'
-import { Suspense, useRef, useEffect } from 'react'
+import { Suspense, useRef, useEffect, useCallback, memo } from 'react'
 import SceneObjects from './SceneObjects'
 import UserAvatars from './UserAvatars'
 import { useSceneStore } from '@/lib/store/useSceneStore'
@@ -13,9 +13,17 @@ interface Scene3DProps {
   userName: string
 }
 
-export default function Scene3D({ userColor, userName }: Scene3DProps) {
-  const cameraRef = useRef<any>()
-  const controlsRef = useRef<any>()
+interface OrbitControlsRef {
+  mouseButtons: {
+    LEFT: number
+    MIDDLE: number
+    RIGHT: number
+  }
+}
+
+function Scene3D({ userColor, userName }: Scene3DProps) {
+  const cameraRef = useRef<THREE.PerspectiveCamera>(null)
+  const controlsRef = useRef<OrbitControlsRef>(null)
   const isDragging = useSceneStore((state) => state.isDragging)
   const { setSelectedObject } = useSceneStore()
   
@@ -24,7 +32,7 @@ export default function Scene3D({ userColor, userName }: Scene3DProps) {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift' && controlsRef.current) {
         // Enable pan when Shift is pressed
-        const controls = controlsRef.current as any
+        const controls = controlsRef.current
         if (controls) {
           controls.mouseButtons = {
             LEFT: THREE.MOUSE.PAN,
@@ -38,7 +46,7 @@ export default function Scene3D({ userColor, userName }: Scene3DProps) {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Shift' && controlsRef.current) {
         // Disable pan when Shift is released, back to rotate
-        const controls = controlsRef.current as any
+        const controls = controlsRef.current
         if (controls) {
           controls.mouseButtons = {
             LEFT: THREE.MOUSE.ROTATE,
@@ -63,12 +71,12 @@ export default function Scene3D({ userColor, userName }: Scene3DProps) {
       gl={{ antialias: true, alpha: false }}
       dpr={[1, 2]}
       className="w-full h-full"
-      onClick={(e) => {
+      onClick={useCallback((e: any) => {
         // Clear selection when clicking on empty space (not on an object)
         if (e.delta === 0 && !e.object) {
           setSelectedObject(null)
         }
-      }}
+      }, [setSelectedObject])}
     >
       <Suspense fallback={null}>
         {/* Lighting */}
@@ -133,4 +141,6 @@ export default function Scene3D({ userColor, userName }: Scene3DProps) {
     </Canvas>
   )
 }
+
+export default memo(Scene3D)
 
