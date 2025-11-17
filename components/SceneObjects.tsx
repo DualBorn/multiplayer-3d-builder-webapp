@@ -1,39 +1,34 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useCallback, memo } from 'react'
 import { ThreeEvent } from '@react-three/fiber'
 import { Box, Sphere, Text } from '@react-three/drei'
 import * as THREE from 'three'
 import { useSceneStore, SceneObject } from '@/lib/store/useSceneStore'
 import { supabase } from '@/lib/supabase/client'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 interface SceneObjectsProps {
   userColor: string
   userName: string
 }
 
-export default function SceneObjects({ userColor, userName }: SceneObjectsProps) {
+function SceneObjects({ userColor, userName }: SceneObjectsProps) {
   const { objects, selectedObjectId, setSelectedObject, removeObject, setDragging: setGlobalDragging } = useSceneStore()
   const [dragging, setDragging] = useState<string | null>(null)
   const [dragOffset, setDragOffset] = useState<THREE.Vector3 | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ obj: SceneObject } | null>(null)
 
-  const handleObjectClick = (e: ThreeEvent<MouseEvent>, obj: SceneObject) => {
+  const handleObjectClick = useCallback((e: ThreeEvent<MouseEvent>, obj: SceneObject) => {
     e.stopPropagation()
     // Always allow selection on click
     setSelectedObject(obj.id)
-  }
+  }, [setSelectedObject])
 
-  const handleObjectDoubleClick = async (e: ThreeEvent<MouseEvent>, obj: SceneObject) => {
+  const handleObjectDoubleClick = useCallback((e: ThreeEvent<MouseEvent>, obj: SceneObject) => {
     e.stopPropagation()
-    if (confirm('Delete this object?')) {
-      await supabase.from('scene_objects').delete().eq('id', obj.id)
-      removeObject(obj.id)
-      // Clear selection after deletion
-      if (selectedObjectId === obj.id) {
-        setSelectedObject(null)
-      }
-    }
-  }
+    setDeleteConfirm({ obj })
+  }, [])
 
   const handleDragStart = (e: ThreeEvent<PointerEvent>, obj: SceneObject) => {
     e.stopPropagation()
@@ -46,7 +41,7 @@ export default function SceneObjects({ userColor, userName }: SceneObjectsProps)
     }
   }
 
-  const handleDragEnd = async () => {
+  const handleDragEnd = useCallback(async () => {
     if (dragging) {
       const obj = objects.find((o) => o.id === dragging)
       if (obj) {
@@ -62,7 +57,23 @@ export default function SceneObjects({ userColor, userName }: SceneObjectsProps)
     setDragging(null)
     setDragOffset(null)
     setGlobalDragging(false) // Re-enable camera controls
-  }
+  }, [dragging, objects, setGlobalDragging])
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteConfirm) return
+    const { obj } = deleteConfirm
+    await supabase.from('scene_objects').delete().eq('id', obj.id)
+    removeObject(obj.id)
+    // Clear selection after deletion
+    if (selectedObjectId === obj.id) {
+      setSelectedObject(null)
+    }
+    setDeleteConfirm(null)
+  }, [deleteConfirm, removeObject, selectedObjectId, setSelectedObject])
+
+  const handleCancelDelete = useCallback(() => {
+    setDeleteConfirm(null)
+  }, [])
 
   return (
     <>
@@ -84,6 +95,13 @@ export default function SceneObjects({ userColor, userName }: SceneObjectsProps)
           userColor={userColor}
         />
       ))}
+      {deleteConfirm && (
+        <ConfirmDialog
+          message="Delete this object?"
+          onConfirm={handleConfirmDelete}
+          onCancel={handleCancelDelete}
+        />
+      )}
     </>
   )
 }
@@ -156,12 +174,12 @@ function Object3D({
     }
   }
 
-  const handlePointerUp = () => {
+  const handlePointerUp = useCallback(() => {
     // Reset drag tracking
     setPointerDownPos(null)
     setHasMoved(false)
     onPointerUp()
-  }
+  }, [onPointerUp])
 
   // Handle pointer up globally (even if released outside the object)
   useEffect(() => {
@@ -174,7 +192,7 @@ function Object3D({
         window.removeEventListener('pointerup', handleGlobalPointerUp)
       }
     }
-  }, [isDragging])
+  }, [isDragging, handlePointerUp])
 
   const Component = obj.type === 'cube' ? Box : Sphere
   // Make sphere slightly larger for easier interaction (0.6 instead of 0.5)
@@ -216,4 +234,6 @@ function Object3D({
     </group>
   )
 }
+
+export default memo(SceneObjects)
 
